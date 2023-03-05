@@ -1,0 +1,1133 @@
+---
+title: "Crime Statistics in WA: 2012-2021"
+subtitle: "Next Steps Washington"
+author: "Everyone Comes Home Alive"
+date: "Last report update: `r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    includes:
+       in_header: gtag.crime2021.html
+---
+
+<base target="_top"/>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, fig.height = 5)
+```
+
+```{r prelim, warning=F}
+library(readr)
+library(readxl)
+library(tidyverse)
+library(plotly)
+library(kableExtra)
+library(here)
+#library(leaflet)
+library(lubridate)
+library(gridExtra)
+library(cowplot)
+
+# Data ----
+
+## WA OFM Population data (post-censal estimate series) ----
+## "Filter" variable identifies level, 1 is county total
+
+wa_pop_raw <- read_excel("~/GitHub/PopulationEstimates/WA-OFM/ofm_april1_postcensal_estimates_pop_1960-present.xlsx", 
+    sheet = "Population", skip = 3) 
+
+wa_pop <- wa_pop_raw %>%
+  filter(Filter == 1 | Jurisdiction == "State Total") %>%
+  select(Jurisdiction, matches("2012|2013|2014|2015|2016|2017|2018|2019|2020|2021")) %>%
+  rename_at(vars(starts_with("2")), ~sub(" Postcen.*tion.*", "", .)) %>%
+  rename_at(vars(contains("2020")), ~sub(".*$", "2020", .)) %>%
+  rename_at(vars(starts_with("2")), ~sub("^", "Y", .)) %>%
+  mutate(across(starts_with("Y"), ~as.numeric(.)),
+         pct.chg = Y2021/Y2012 - 1)
+
+  
+## just the state totals by year
+wa_poptotal_long   <- wa_pop_raw %>%
+  filter(Jurisdiction == "State Total") %>%
+  select(matches("2012|2013|2014|2015|2016|2017|2018|2019|2020|2021")) %>%
+  pivot_longer(everything(),
+               names_to = "Year",
+               values_to = "StatePop") %>%
+  mutate(Year = sub("Postcen.*tion.*", "", Year),
+         Year = sub("Cen.*tion", "", Year),
+         Year = as.numeric(Year),
+         StatePop = as.numeric(StatePop))
+
+
+## OFM NIBRS ----
+## Get cleaned OFM NIBRS data for WA (annual updates lag by about 10 mos)
+
+## NOTE THEIR RATES ARE PER 1000 PERSONS 
+
+library(readxl)
+#url <- "https://sac.ofm.wa.gov/sites/default/files/public/download/nibrs_12_20.xlsx"
+url <- "https://sac.ofm.wa.gov/sites/default/files/public/download/nibrs_12_21.xlsx"
+destfile <-  here::here("Data", "OFM NIBRS", "nibrs_12_21.xlsx")
+curl::curl_download(url, destfile)
+nibrs_wide <- read_excel(destfile, skip = 1) %>%
+  select(Location:Animal_Cruelty)
+
+nibrs_rates_wide <- nibrs_wide %>%
+  mutate_at(vars(Murder:Viol_Of_No_Contact), ~ 100000 * .x/Population) %>%
+  mutate_at(vars(Arson:Theft), ~ 100000 * .x/Population) %>%
+  mutate_at(vars(Drug_Violations:Animal_Cruelty), ~ 100000 * .x/Population)
+
+# We mimic the version of the data obtained when downloading from the Tableau portal, in
+# case we ever need to go back to using that
+
+nibrs_long <- nibrs_wide %>%
+  pivot_longer(cols = Population:Animal_Cruelty,
+               names_to = "Offence label",
+               values_to = "Count") %>%
+  rename(County = county) %>%
+  mutate(
+    IndexYear = as.numeric(IndexYear),
+    value = Count, # some are rates, some are counts
+    `Offence Type` = case_when(
+      `Offence label` == "Population" ~ "Location Population",
+      grepl("Prsn|Murd|Mans|Forc|Assa|Kidn|Huma|Viol_Of", `Offence label`) ~ "Crimes Against Persons",
+      grepl("Prpr|Arso|Brib|Burg|Counter|Dest|Exto|Robb|Thef", `Offence label`) ~ "Crimes Against Property",
+      grepl("Scty|Drug|Gamb|Porn|Pros|Weap|Anim", `Offence label`) ~ "Crimes Against Society",
+      grepl("Total|Rate", `Offence label`) ~ "Total Crimes"
+    ),
+    `Offence label` = recode(
+      `Offence label`,
+      "Population" = "Location Population",
+      "Total" = "Total Crimes",
+      "Rate" = "Total Crime Rate",
+      "PrsnTotal" = "Person Crime Total",
+      "PrsnRate" = "Person Crime Rate",
+      "PrprtyRate" = "Property Crime Rate",
+      "PrprtyTotal" = "Property Crime Total",
+      "SctyTotal" = "Society Crimes Total",
+      "SctyRate" = "Society Crime Rate"
+    ))
+#
+
+nibrs_rates_long <- nibrs_rates_wide %>%
+  pivot_longer(cols = Population:Animal_Cruelty,
+               names_to = "Offence label",
+               values_to = "Count") %>%
+  rename(County = county) %>%
+  mutate(
+    IndexYear = as.numeric(IndexYear),
+    value = Count, # some are rates, some are counts
+    `Offence Type` = case_when(
+      `Offence label` == "Population" ~ "Location Population",
+      grepl("Prsn|Murd|Mans|Forc|Assa|Kidn|Huma|Viol_Of", `Offence label`) ~ "Crimes Against Persons",
+      grepl("Prpr|Arso|Brib|Burg|Counter|Dest|Exto|Robb|Thef", `Offence label`) ~ "Crimes Against Property",
+      grepl("Scty|Drug|Gamb|Porn|Pros|Weap|Anim", `Offence label`) ~ "Crimes Against Society",
+      grepl("Total|Rate", `Offence label`) ~ "Total Crimes"
+    ),
+    `Offence label` = recode(
+      `Offence label`,
+      "Population" = "Location Population",
+      "Total" = "Total Crimes",
+      "Rate" = "Total Crime Rate",
+      "PrsnTotal" = "Person Crime Total",
+      "PrsnRate" = "Person Crime Rate",
+      "PrprtyRate" = "Property Crime Rate",
+      "PrprtyTotal" = "Property Crime Total",
+      "SctyTotal" = "Society Crimes Total",
+      "SctyRate" = "Society Crime Rate"
+    ))
+
+
+ofm.source.url <- "https://sac.ofm.wa.gov/data"
+
+wa.minyr = min(nibrs_long$IndexYear)
+wa.maxyr = max(nibrs_long$IndexYear)
+
+wa.breaks = wa.minyr:wa.maxyr
+wa.labels = as.character(wa.minyr:wa.maxyr)
+
+
+# For tables showing participation stats in NIBRS
+
+## Aggregate by agency
+## partial variable identifies agencies with non-continuous participation
+
+nibrs_yrs_agency <- nibrs_long %>%
+  select(year = IndexYear, County, Location, measure = `Offence label`, pop = Count) %>%
+  filter(measure == "Location Population" & !grepl("TOTAL", Location)) %>%
+  group_by(County, Location) %>%
+  arrange(year) %>%
+  summarize(startyr = min(year),
+            endyr = max(year),
+            start.pop = first(pop),
+            end.pop = last(pop),
+            avg.pop = round(mean(pop, na.rm=T))) %>%
+  arrange(startyr, County, Location) %>%
+  mutate(numyrs = endyr - startyr + 1,
+         partial = ifelse(numyrs < (wa.maxyr-wa.minyr+1) & endyr != wa.maxyr, 1, 0))
+
+
+## Aggregate by county
+nibrs_yrs_county <- nibrs_yrs_agency %>%
+  group_by(County) %>%
+  summarize(n.jurisdictions.start = sum(startyr==wa.minyr),
+            n.jurisdictions.end = sum(endyr==wa.maxyr),
+            last.startyr = max(startyr))
+
+
+## Population change by location
+## Remember: pop here is pop covered by NIBRS
+## So county totals are not comparable until full coverage
+## full coverage year = 2018
+
+start <- paste0("Y", as.character(wa.minyr))
+end <- paste0("Y", as.character(wa.minyr))
+wa_pop_changes <- nibrs_wide %>%
+  filter(IndexYear == wa.minyr | IndexYear == 2018 | IndexYear == wa.maxyr) %>%
+  select(IndexYear, County=county, Location, Population) %>%
+  pivot_wider(id_cols = c(County, Location), 
+              names_from = IndexYear, 
+              names_prefix = "Y",
+              values_from = Population) %>%
+  mutate(pct.chg.pop.cvr = Y2021/Y2012 -1)
+
+## NIBRS pop coverage
+## pct coverage is based on WA pop that year
+
+nibrs_pop_coverage <- nibrs_long %>%
+  select(year = IndexYear, County, Location, measure = `Offence label`, pop = Count) %>%
+  filter(measure == "Location Population" & !grepl("TOTAL", Location)) %>%
+  group_by(year) %>%
+  summarize(num.agencies = n(),
+            pop.cvr = sum(pop, na.rm=T)) %>%
+  left_join(wa_poptotal_long, by=c("year" = "Year")) %>%
+  mutate(pop.cvr.pct = pop.cvr/StatePop)
+
+
+```
+
+# Introduction
+
+The narrative of "rising crime rates" seems to emerge whenever there is a threat of reforms that address police tactics and accountability. Such claims are currently playing a large role in the narrative for rolling back police reforms that WA State enacted in 2021. 
+
+Since the data on crime statistics in WA state are publicly available, it is worth comparing these claims to the evidence.  In this report we track the statewide trends in crime rates (per 1,000 residents) from 2012-2021 in WA, using the official statewide data published by the [Washington Statistical Analysis Center](https://sac.ofm.wa.gov/data).
+
+* The statewide data for 2022 data are not available yet. 
+
+____
+
+### **KEY FINDINGS**
+
+*In one sentence:*  **There is no evidence that crime increased in WA State after the reform legislation**
+
+**Overall, crime rates fell by 4% in WA state in 2021**
+
+* The legislation took effect in the middle of this year.
+* Property crime rates rates fell slightly
+* The rate of crimes against persons rose slightly
+* The rate of crimes against society fell substantially, largely due to the effects of the Blake decision
+
+**There was a small statewide uptick in crime in WA state in 2020**
+
+* This was the year *before* the 2021 legislative reforms.
+* It was driven by a rise in property crime; crimes against persons and society actually *declined* slightly 
+* Upticks in crime rates were reported nationwide, not just here in WA  
+
+
+*Overall 2021 crime rates in WA appear to be the second lowest in the past decade.*
+
+Trends at the county and local levels over the past decade varied *a lot*, with no consistent patterns for 2021.  This, too, suggests that the statewide legislative reforms did not have an identifiable statewide impact on crime rates.
+
+____
+
+
+The national crime data reporting system, which these WA data are part of, has been in transition for about a decade, from the old "Summary Reporting System" (SRS) to the new "National Incident Based Reporting System" (NIBRS).  The transition was phased in over time, allowing agencies to switch over as their systems were updated.  The old SRS was finally retired in 2021.  This has implications for the trends the data show over time, and it makes interpreting these trends complicated.  Please see the [section on Data Sources in this report](#data) for more details and [this report from the Marshall Project](https://www.themarshallproject.org/2022/10/08/the-problem-with-the-fbi-s-missing-crime-data) for a summary of the issues.
+
+
+*Note: you can navigate through this document using the floating Table of Contents to the left, and the tabs within sections.*
+
+
+
+# Trends: 2012-2021
+
+The data in this section come from the WA OFM NIBRS data downloads.  The graphs show the trends in the crime rates per 1,000 persons.  The tables show the numbers used in each graph.
+
+## WA State totals {.tabset .tabset-pills}
+
+### Rates
+
+```{r wa, message=F, warning=F}
+wa_tot <- nibrs_long %>%
+  filter(County == "STATEWIDE") %>%
+  filter(grepl("Rate", `Offence label`)) %>%
+  mutate(Year = IndexYear,
+         Type = `Offence label`)
+
+p <- ggplot(data = wa_tot,
+            aes(x = Year, y = value, 
+                group_by = Type, color = Type)) +
+  geom_line(stat = "identity") +
+  geom_point(stat = "identity",
+             aes(text = paste0(Year, ":  ", value))) +
+  
+  scale_x_continuous(breaks = wa.breaks, labels = wa.labels) +
+  
+  labs(title = paste("Crime Rate Trends in WA State:  ", wa.minyr, "-", wa.maxyr),
+       subtitle = paste(wa.maxyr+1, "data not yet available"),
+       caption = "Data Source:  WA State OFM-SAC NIBRS download",
+       x = "Year",
+       y = "Rate per 1,000 persons")
+
+ggplotly(p, tooltip = "text")
+
+```
+
+*Graph notes:*
+
+* Data Source:  WA State OFM-SAC NIBRS download, https://sac.ofm.wa.gov/data
+* Data for `r wa.maxyr+1` not yet available.
+
+____
+
+### Year to year changes {.tabset .tabset-pills}
+
+These graphs help to give a sense of what typical year to year changes look like.  The measure used to represent change is the percent change from one year to the next:  `(current year rate)/(previous year rate) - 1`.  
+
+Note the pattern of changes over time:
+
+* There is a mix of increases and decreases, typically within +/- 15%.  The exception is the 2021 change in the "Crimes Against Society" rate.
+
+* The different crime types do not always rise and fall together
+
+* There are no sustained periods of increase, or decrease
+
+* The pattern for the Total is driven mostly by the Property crimes, since Property crimes account for about 75% of the total.
+
+For the most part, this is what "typical year to year variation" looks like.  There is no indication that 2021 was an unusual year, with one exception: the large decline in "Crimes Against Society".  That decline is clearly due to the impact of the Blake decision on drug enforcement, and it is a good example of what a legal change looks like when it *does* have an impact.
+
+
+#### Graph
+
+```{r waplot, message=F, warning=F}
+
+# no 2021 for this.yr
+
+wa_tot_tab <- nibrs_long %>%
+  filter(County == "STATEWIDE") %>%
+  filter(grepl("Rate", `Offence label`)) %>%
+  mutate(year = IndexYear,
+         type = sub(" Crime.*", "", `Offence label`)) %>%
+  select(year, type, value) %>%
+  arrange(type) %>%
+  
+  pivot_wider(id_cols = year,
+              names_from = type,
+              values_from = value) %>%
+  
+  mutate(pct.chg.person = Person/lag(Person) - 1,
+         pct.chg.property = Property/lag(Property) - 1,
+         pct.chg.society = Society/lag(Society) - 1,
+         pct.chg.total = Total/lag(Total) - 1
+  )
+
+wa_chgs <- wa_tot_tab %>%
+  pivot_longer(cols = contains("pct"),
+               names_to = "type",
+               values_to = "pct.chg") %>%
+  mutate(type = sub("pct.chg.", "", type)) %>%
+  select(year, type, pct.chg)
+
+p <- ggplot(data = wa_chgs,
+            aes(x = factor(year), y = pct.chg,
+                text = scales::percent(pct.chg, acc=1),
+                fill = pct.chg)) +
+  
+  geom_bar(stat = "identity", position = "dodge", 
+           color = "grey",
+           alpha = 0.9) +
+  
+  geom_hline(yintercept = 0, col = "grey") +
+  
+  
+  scale_fill_gradient2(
+    name = "% change",
+    low = "blue", 
+    mid = "white", 
+    high = "red", 
+    midpoint = 0) +
+  
+  scale_y_continuous(labels = scales::percent_format(acc=1)) +
+  
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        panel.margin.x = unit(1,"lines"), 
+        panel.margin.y = unit(2,"lines")) +
+  
+  facet_wrap(. ~ type) +
+  
+  labs(title = paste("Year-to-year percent change in crime rates:  ", wa.minyr, "-", wa.maxyr),
+       subtitle = paste(wa.maxyr+1, "data not yet available"),
+       caption = "Data Source:  WA State OFM-SAC NIBRS download",
+       x = "Year",
+       y = "Percent change")
+
+ggplotly(p, tooltip = "text")
+
+```
+
+*Graph notes:*
+
+* Data Source:  WA State OFM-SAC NIBRS download
+* Data for `r wa.maxyr+1` not yet available.
+
+____
+
+#### Table
+
+```{r watab, message=F, warning=F}
+
+colnames = c("Year", rep(names(wa_tot_tab)[2:5], 2))
+
+wa_tot_tab %>%
+  mutate(across(contains("pct"), ~.x *100)) %>%
+  
+  kbl(caption = "Washington State Crime Rates:  2012-2020",
+      col.names = colnames,
+      digits = c(rep(1,5), rep(1,4))) %>%
+  kable_styling(bootstrap_options = c("striped", "hover")) %>%
+  
+  column_spec(c(5, 9), bold = T, border_right = T) %>%
+  
+  add_header_above(c(" " = 1, "Rates per 1,000 persons" = 4, "Yr to Yr % changes" = 4)) %>%
+  
+  add_footnote(paste("Data Source: WA OFM download from", ofm.source.url),
+               notation = "none")
+
+
+```
+
+____
+
+## By jurisdiction
+
+In the plots for specific jurisdictions, if a county did not participate before a certain year, the city and county data are only shown from that year forward.  For more information, see the [Where the data come from](#Introduction) tab in the Introduction above.
+
+### Seattle / King County {.tabset .tabset-pills}
+
+#### City of Seattle
+
+```{r seattle, message=F, warning=F}
+seattle_pd_tot <- nibrs_long %>%
+  filter(County == "KING") %>%
+  filter(Location == "Seattle Police Department") %>%
+  filter(grepl("Rate", `Offence label`)) %>%
+  mutate(Year = IndexYear,
+         Type = `Offence label`)
+
+p <- ggplot(data = seattle_pd_tot,
+            aes(x = Year, y = value, group_by = Type, color = Type)) +
+  geom_line(stat = "identity") +
+  geom_point(stat = "identity",
+             aes(text = paste0(Year, ": ", round(value)))) +
+  
+  scale_x_continuous(breaks = wa.breaks, labels = wa.labels) +
+  
+  labs(title = paste("Crime Rate Trends in Seattle:  ", wa.minyr, "-", wa.maxyr),
+       subtitle = paste(wa.maxyr+1, "data not yet available"),
+       caption = "Data Source:  WA State OFM-SAC NIBRS download",
+       x = "Year",
+       y = "Rate per 1,000 persons")
+
+
+ggplotly(p, tooltip = "text")
+
+```
+
+*Graph notes:*
+
+* Data Source:  WA State OFM-SAC NIBRS download
+* Data for `r wa.maxyr+1` not yet available.
+
+____
+
+#### King County
+
+```{r king, message=F, warning=F}
+king_county_tot <- nibrs_long %>%
+  filter(County == "KING") %>%
+  filter(Location == "COUNTY TOTAL") %>%
+  filter(grepl("Rate", `Offence label`)) %>%
+  mutate(Year = IndexYear,
+         Type = `Offence label`)
+
+p <- ggplot(data = king_county_tot,
+            aes(x = Year, y = value, group_by = Type, color = Type)) +
+  geom_line(stat = "identity") +
+  geom_point(stat = "identity",
+             aes(text = paste0(Year, ": ", round(value)))) +
+  
+  scale_x_continuous(breaks = wa.breaks, labels = wa.labels) +
+  
+  scale_x_continuous(breaks = wa.breaks, labels = wa.labels) +
+  
+  labs(title = paste("Crime Rate Trends in King County:  ", wa.minyr, "-", wa.maxyr),
+       subtitle = paste(wa.maxyr+1, "data not yet available"),
+       caption = "Data Source:  WA State OFM-SAC NIBRS download",
+       x = "Year",
+       y = "Rate per 1,000 persons")
+
+
+ggplotly(p, tooltip = "text")
+
+```
+
+*Graph notes:*
+
+* Data Source:  WA State OFM-SAC NIBRS download
+* Data for `r wa.maxyr+1` not yet available.
+
+____
+
+### Tacoma / Pierce County {.tabset .tabset-pills}
+
+#### City of Tacoma
+
+```{r tacoma, message=F, warning=F}
+tacoma_pd_tot <- nibrs_long %>%
+  filter(County == "PIERCE") %>%
+  filter(Location == "Tacoma Police Department") %>%
+  filter(grepl("Rate", `Offence label`)) %>%
+  mutate(Year = IndexYear,
+         Type = `Offence label`)
+
+p <- ggplot(data = tacoma_pd_tot,
+            aes(x = Year, y = value, group_by = Type, color = Type)) +
+  geom_line(stat = "identity") +
+  geom_point(stat = "identity",
+             aes(text = paste0(Year, ": ", round(value)))) +
+  
+  scale_x_continuous(breaks = wa.breaks, labels = wa.labels) +
+  
+  labs(title = paste("Crime Rate Trends in Tacoma:  ", wa.minyr, "-", wa.maxyr),
+       subtitle = paste(wa.maxyr+1, "data not yet available"),
+       caption = "Data Source:  WA State OFM-SAC NIBRS download",
+       x = "Year",
+       y = "Rate per 1,000 persons")
+
+
+ggplotly(p, tooltip = "text")
+
+```
+
+*Graph notes:*
+
+* Data Source:  WA State OFM-SAC NIBRS download
+* Data for `r wa.maxyr+1` not yet available.
+
+____
+
+#### Pierce County
+
+```{r pierce, message=F, warning=F}
+pierce_county_tot <- nibrs_long %>%
+  filter(County == "PIERCE") %>%
+  filter(Location == "COUNTY TOTAL") %>%
+  filter(grepl("Rate", `Offence label`)) %>%
+  mutate(Year = IndexYear,
+         Type = `Offence label`)
+
+p <- ggplot(data = pierce_county_tot, 
+            aes(x = Year, y = value, group_by = Type, color = Type)) +
+  geom_line(stat = "identity") +
+  geom_point(stat = "identity",
+             aes(text = paste0(Year, ": ", round(value)))) +
+  
+  scale_x_continuous(breaks = wa.breaks, labels = wa.labels) +
+  
+  labs(title = paste("Crime Rate Trends in Pierce County:  ", wa.minyr, "-", wa.maxyr),
+       subtitle = paste(wa.maxyr+1, "data not yet available"),
+       caption = "Data Source:  WA State OFM-SAC NIBRS download",
+       x = "Year",
+       y = "Rate per 1,000 persons")
+
+
+ggplotly(p, tooltip = "text")
+
+```
+
+*Graph notes:*
+
+* Data Source:  WA State OFM-SAC NIBRS download
+* Data for `r wa.maxyr+1` not yet available.
+
+____
+
+### Everett / Snohomish County {.tabset .tabset-pills}
+
+The City of Everett joined NIBRS fully in 2016, so the data start there.
+
+#### Everett
+
+```{r everett, message=F, warning=F}
+
+everett_pd_tot <- nibrs_long %>%
+  filter(County == "SNOHOMISH") %>%
+  filter(Location == "Everett Police Department") %>%
+  filter(grepl("Rate", `Offence label`)) %>%
+  mutate(Year = IndexYear,
+         Type = `Offence label`)
+
+p <- ggplot(data = everett_pd_tot %>% filter(Year > 2015),
+            aes(x = Year, y = value, group_by = Type, color = Type)) +
+  geom_line(stat = "identity") +
+  geom_point(stat = "identity",
+             aes(text = paste0(Year, ": ", round(value)))) +
+  
+  scale_x_continuous(breaks = wa.breaks, labels = wa.labels) +
+  
+  labs(title = paste("Crime Rate Trends in Everett:  ", wa.minyr, "-", wa.maxyr),
+       subtitle = paste(wa.maxyr+1, "data not yet available"),
+       caption = "Data Source:  WA State OFM-SAC NIBRS download",
+       x = "Year",
+       y = "Rate per 1,000 persons")
+
+
+ggplotly(p, tooltip = "text")
+
+```
+
+*Graph notes:*
+
+* Data Source:  WA State OFM-SAC NIBRS download
+* Data for `r wa.maxyr+1` not yet available.
+
+____
+
+#### Snohomish County
+
+```{r snohomish, message=F, warning=F}
+
+snohomish_county_tot <- nibrs_long %>%
+  filter(County == "SNOHOMISH") %>%
+  filter(Location == "COUNTY TOTAL") %>%
+  filter(grepl("Rate", `Offence label`)) %>%
+  mutate(Year = IndexYear,
+         Type = `Offence label`)
+
+p <- ggplot(data = snohomish_county_tot %>% filter(Year > 2015),
+            aes(x = Year, y = value, group_by = Type, color = Type)) +
+  geom_line(stat = "identity") +
+  geom_point(stat = "identity",
+             aes(text = paste0(Year, ": ", round(value)))) +
+  
+  scale_x_continuous(breaks = wa.breaks, labels = wa.labels) +
+  
+  labs(title = paste("Crime Rate Trends in Snohomish County:  ", wa.minyr, "-", wa.maxyr),
+       subtitle = paste(wa.maxyr+1, "data not yet available"),
+       caption = "Data Source:  WA State OFM-SAC NIBRS download",
+       x = "Year",
+       y = "Rate per 1,000 persons")
+
+ggplotly(p, tooltip = "text")
+
+```
+
+*Graph notes:*
+
+* Data Source:  WA State OFM-SAC NIBRS download
+* Data for `r wa.maxyr+1` not yet available.
+
+____
+
+### Spokane / Spokane County {.tabset .tabset-pills}
+
+The City of Spokane joined NIBRS fully in 2017, so the data start there.
+
+#### City of Spokane
+
+```{r spokanecity, message=F, warning=F}
+
+spokane_pd_tot <- nibrs_long %>%
+  filter(County == "SPOKANE") %>%
+  filter(Location == "Spokane Police Department") %>%
+  filter(grepl("Rate", `Offence label`)) %>%
+  mutate(Year = IndexYear,
+         Type = `Offence label`)
+
+p <- ggplot(data = spokane_pd_tot %>% filter(Year > 2016),
+            aes(x = Year, y = value, group_by = Type, color = Type)) +
+  geom_line(stat = "identity") +
+  geom_point(stat = "identity",
+             aes(text = paste0(Year, ": ", round(value)))) +
+  
+  scale_x_continuous(breaks = wa.breaks, labels = wa.labels) +
+  
+  labs(title = paste("Crime Rate Trends in Spokane City:  ", wa.minyr, "-", wa.maxyr),
+       subtitle = paste(wa.maxyr+1, "data not yet available"),
+       caption = "Data Source:  WA State OFM-SAC NIBRS download",
+       x = "Year",
+       y = "Rate per 1,000 persons")
+
+
+ggplotly(p, tooltip = "text")
+
+```
+
+*Graph notes:*
+
+* Data Source:  WA State OFM-SAC NIBRS download
+* Data for `r wa.maxyr+1` not yet available.
+
+____
+
+#### Spokane County
+
+```{r spokanecounty, message=F, warning=F}
+spokane_county_tot <- nibrs_long %>%
+  filter(County == "SPOKANE") %>%
+  filter(Location == "COUNTY TOTAL") %>%
+  filter(grepl("Rate", `Offence label`)) %>%
+  mutate(Year = IndexYear,
+         Type = `Offence label`)
+
+p <- ggplot(data = spokane_county_tot %>% filter(Year > 2016),
+            aes(x = Year, y = value, group_by = Type, color = Type)) +
+  geom_line(stat = "identity") +
+  geom_point(stat = "identity",
+             aes(text = paste0(Year, ": ", round(value)))) +
+  
+  scale_x_continuous(breaks = wa.breaks, labels = wa.labels) +
+  
+  labs(title = paste("Crime Rate Trends in Spokane County:  ", wa.minyr, "-", wa.maxyr),
+       subtitle = paste(wa.maxyr+1, "data not yet available"),
+       caption = "Data Source:  WA State OFM-SAC NIBRS download",
+       x = "Year",
+       y = "Rate per 1,000 persons")
+
+ggplotly(p, tooltip = "text")
+
+```
+
+*Graph notes:*
+
+* Data Source:  WA State OFM-SAC NIBRS download
+* Data for `r wa.maxyr+1` not yet available.
+
+____
+
+### Vancouver / Clark County {.tabset .tabset-pills}
+
+#### City of Vancouver
+
+```{r vancouver, message=F, warning=F}
+
+vancouver_pd_tot <- nibrs_long %>%
+  filter(County == "CLARK") %>%
+  filter(Location == "Vancouver Police Department") %>%
+  filter(grepl("Rate", `Offence label`)) %>%
+  mutate(Year = IndexYear,
+         Type = `Offence label`)
+
+p <- ggplot(data = vancouver_pd_tot,
+            aes(x = Year, y = value, group_by = Type, color = Type)) +
+  geom_line(stat = "identity") +
+  geom_point(stat = "identity",
+             aes(text = paste0(Year, ": ", round(value)))) +
+  
+  scale_x_continuous(breaks = wa.breaks, labels = wa.labels) +
+  
+  labs(title = paste("Crime Rate Trends in Vancouver:  ", wa.minyr, "-", wa.maxyr),
+       subtitle = paste(wa.maxyr+1, "data not yet available"),
+       caption = "Data Source:  WA State OFM-SAC NIBRS download",
+  )
+
+ggplotly(p, tooltip = "text")
+
+```
+
+*Graph notes:*
+
+* Data Source:  WA State OFM-SAC NIBRS download
+* Data for `r wa.maxyr+1` not yet available.
+
+____
+
+#### Clark County
+
+```{r clark, message=F, warning=F}
+clark_county_tot <- nibrs_long %>%
+  filter(County == "CLARK") %>%
+  filter(Location == "COUNTY TOTAL") %>%
+  filter(grepl("Rate", `Offence label`)) %>%
+  mutate(Year = IndexYear,
+         Type = `Offence label`)
+
+p <- ggplot(data = clark_county_tot,
+            aes(x = Year, y = value, group_by = Type, color = Type)) +
+  geom_line(stat = "identity") +
+  geom_point(stat = "identity",
+             aes(text = paste0(Year, ": ", round(value)))) +
+  
+  scale_x_continuous(breaks = wa.breaks, labels = wa.labels) +
+  
+  labs(title = paste("Crime Rate Trends in Clark County:  ", wa.minyr, "-", wa.maxyr),
+       subtitle = paste(wa.maxyr+1, "data not yet available"),
+       caption = "Data Source:  WA State OFM-SAC NIBRS download",
+       x = "Year",
+       y = "Rate per 1,000 persons")
+
+
+ggplotly(p, tooltip = "text")
+
+```
+
+*Graph notes:*
+
+* Data Source:  WA State OFM-SAC NIBRS download
+* Data for `r wa.maxyr+1` not yet available.
+
+____
+
+### Tri-Cities / Benton & Franklin Counties {.tabset .tabset-pills}
+
+The Tri-Cities area includes the cities of Kennewick, Pasco, Richland and West Richland, and the metropolitan area is split between Benton and Franklin counties. 
+
+#### Tri-Cities
+
+```{r tricities, message=F, warning=F}
+tricities_pd_tot <- nibrs_long %>%
+  filter(grepl("Kennewick|Pasco|Richland", Location)) %>%
+  filter(grepl("Rate", `Offence label`)) %>%
+  mutate(Year = IndexYear,
+         Type = `Offence label`)
+
+p <- ggplot(data = tricities_pd_tot,
+            aes(x = Year, y = value, group_by = Type, color = Type)) +
+  geom_line(stat = "identity") +
+  geom_point(stat = "identity",
+             aes(text = paste0(Year, ": ", round(value)))) +
+  
+  facet_wrap(~ Location) +
+  
+  scale_x_continuous(breaks = wa.breaks, labels = wa.labels) +
+  
+  labs(title = paste("Crime Rate Trends in the Tri-Cities:  ", wa.minyr, "-", wa.maxyr),
+       subtitle = paste(wa.maxyr+1, "data not yet available"),
+       caption = "Data Source:  WA State OFM-SAC NIBRS download",
+       x = "Year",
+       y = "Rate per 1,000 persons")
+
+
+ggplotly(p, tooltip = "text")
+
+```
+
+*Graph notes:*
+
+* Data Source:  WA State OFM-SAC NIBRS download
+* Data for `r wa.maxyr+1` not yet available.
+
+____
+
+#### Benton and Franklin Counties
+
+```{r bentonfranklin, message=F, warning=F}
+bentonfranklin_county_tot <- nibrs_long %>%
+  filter(grepl("BENTON|FRANKLIN", County)) %>%
+  filter(Location == "COUNTY TOTAL") %>%
+  filter(grepl("Rate", `Offence label`)) %>%
+  mutate(Year = IndexYear,
+         Type = `Offence label`)
+
+p <- ggplot(data = bentonfranklin_county_tot, 
+            aes(x = Year, y = value, group_by = Type, color = Type)) +
+  geom_line(stat = "identity") +
+  geom_point(stat = "identity",
+             aes(text = paste0(Year, ": ", round(value)))) +
+  
+  facet_wrap(~ County) +
+  
+  scale_x_continuous(breaks = wa.breaks, labels = wa.labels) +
+  
+  labs(title = paste("Crime Rate Trends in Benton and Franklin Counties:  ", wa.minyr, "-", wa.maxyr),
+       subtitle = paste(wa.maxyr+1, "data not yet available"),
+       caption = "Data Source:  WA State OFM-SAC NIBRS download",
+       x = "Year",
+       y = "Rate per 1,000 persons")
+
+
+ggplotly(p, tooltip = "text")
+
+```
+
+*Graph notes:*
+
+* Data Source:  WA State OFM-SAC NIBRS download
+* Data for `r wa.maxyr+1` not yet available.
+
+____
+
+### Yakima City / Yakima County {.tabset .tabset-pills}
+
+
+#### Yakima City
+
+```{r yakimacity, message=F, warning=F}
+yakima_pd_tot <- nibrs_long %>%
+  filter(grepl("Yakima Police", Location)) %>%
+  filter(grepl("Rate", `Offence label`)) %>%
+  mutate(Year = IndexYear,
+         Type = `Offence label`)
+
+p <- ggplot(data = yakima_pd_tot,
+            aes(x = Year, y = value, group_by = Type, color = Type)) +
+  geom_line(stat = "identity") +
+  geom_point(stat = "identity",
+             aes(text = paste0(Year, ": ", round(value)))) +
+  
+  facet_wrap(~ Location) +
+  
+  scale_x_continuous(breaks = wa.breaks, labels = wa.labels) +
+  
+  labs(title = paste("Crime Rate Trends in Yakima City:  ", wa.minyr, "-", wa.maxyr),
+       subtitle = paste(wa.maxyr+1, "data not yet available"),
+       caption = "Data Source:  WA State OFM-SAC NIBRS download",
+       x = "Year",
+       y = "Rate per 1,000 persons")
+
+
+ggplotly(p, tooltip = "text")
+
+```
+
+*Graph notes:*
+
+* Data Source:  WA State OFM-SAC NIBRS download
+* Data for `r wa.maxyr+1` not yet available.
+
+____
+
+#### Yakima County
+
+```{r yakimacounty, message=F, warning=F}
+yakima_county_tot <- nibrs_long %>%
+  filter(grepl("YAKIMA", County)) %>%
+  filter(Location == "COUNTY TOTAL") %>%
+  filter(grepl("Rate", `Offence label`)) %>%
+  mutate(Year = IndexYear,
+         Type = `Offence label`)
+
+p <- ggplot(data = yakima_county_tot, 
+            aes(x = Year, y = value, group_by = Type, color = Type)) +
+  geom_line(stat = "identity") +
+  geom_point(stat = "identity",
+             aes(text = paste0(Year, ": ", round(value)))) +
+  
+  scale_x_continuous(breaks = wa.breaks, labels = wa.labels) +
+  
+  labs(title = paste("Crime Rate Trends in Yakima County:  ", wa.minyr, "-", wa.maxyr),
+       subtitle = paste(wa.maxyr+1, "data not yet available"),
+       caption = "Data Source:  WA State OFM-SAC NIBRS download",
+       x = "Year",
+       y = "Rate per 1,000 persons")
+
+
+ggplotly(p, tooltip = "text")
+
+```
+
+*Graph notes:*
+
+* Data Source:  WA State OFM-SAC NIBRS download
+* Data for `r wa.maxyr+1` not yet available.
+
+____
+
+
+# Data Source {#data}
+
+The data used in this report are the official WA state crime data, downloaded from the [Washington Statistical Analysis Center website](https://sac.ofm.wa.gov/data).  Some details are provided below on where these official data come from; much more information can be obtained by clicking through the links provided.
+
+This report follows the standard approach of presenting the trends in crime rates (per 1,000 persons), not the raw crime counts.  This helps to mitigate the impact of the changing coverage of the NIBRS program over this time, and adjust for the changes in population size of each jurisdiction.  The population data used in this adjustment is included in the official WA State data set from WSAC.
+
+## The NIBRS program
+
+The WA State crime data come from the "National Incident Based Reporting System" (NIBRS).  Law enforcement agencies in the US participate in NIBRS on a voluntary basis as part of the Federal Bureau of Investigation's Uniform Crime Reporting program.  NIBRS replaced an earlier crime data reporting program called the "Summary Reporting System".  More information on NIBRS can be found at the [Bureau of Justice Statistics  website](https://bjs.ojp.gov/data-collection/national-incident-based-reporting-system-nibrs), and some history of the long process of transition between the two systems can be found on [Wikipedia](https://en.wikipedia.org/wiki/National_Incident-Based_Reporting_System).  NIBRS collects information on 23 different offense categories made up of 47 offenses and allows all reportable offenses within an incident to be reported.
+
+Here in WA, the Washington Association of Sheriffs and Police Chiefs (WASPC) collects the monthly reported incident-based offense data from participating law enforcement agencies, cleans it, and sends it on to the FBI.  They also oversaw the transition from the old SRS system to the new NIBRS system.
+The NIBRS program in WA State was fully implemented for non-tribal agencies in 2018, but agencies joined the system at different times before that; we present the data on participation by year below.
+
+WASPC publishes an [annual report](https://www.waspc.org/crime-statistics-reports) of the NIBRS data, with summary breakdowns for each jurisdiction.  This report is in PDF format, so it is not convenient to extract the data for independent analysis.
+
+* The lag time for this report is about 6 months.
+
+The NIBRS data are made available to the WA public through the [Access Washington initiative](https://access.wa.gov/), and are curated by the [Washington State Statistical Analysis Center](https://sac.ofm.wa.gov/data) (WA SAC) in the [Office of Financial Management](https://ofm.wa.gov/).  The data series begins in 2012 -- the original target year established by WASPC for full implementation of NIBRS.
+
+* WA SAC host an online interactive portal for exploring the NIBRS data [here](https://sac.ofm.wa.gov/sites/default/files/public/cjdb/nibrs.html).  
+
+* The WA SAC NIBRS data can be downloaded from their site [here](https://sac.ofm.wa.gov/data).
+
+* The lag time for the release of these data is typically about 10 months.
+
+
+Information on the crime types included in NIBRS can be found [in this document](https://sac.ofm.wa.gov/sites/default/files/public/pdf/NIBRS_Dictionary.pdf).
+
+
+
+## Limitations of the NIBRS data
+
+While WA SAC reports the NIBRS data as a continuous series from `r wa.minyr` to `r wa.maxyr`, it is important to recognize that the number of agencies reporting to the system has changed over this time.
+
+In 2012, the target date for full statewide reporting,
+`r sum(nibrs_yrs_agency $startyr == 2012)` out of `r nrow(nibrs_yrs_agency )` agencies were reporting
+(`r scales::percent(sum(nibrs_yrs_agency $startyr == 2012)/nrow(nibrs_yrs_agency ))`).
+The non-reporting agencies included some of the largest agencies in the state (for example, the King and Spokane County Sheriff's offices and the Olympia Police Department), so the percent of the population covered by NIBRS in 2012 was about
+`r scales::percent(nibrs_pop_coverage$pop.cvr.pct[nibrs_pop_coverage$year==2012])`.
+
+By 2018, the NIBRS population coverage was close to complete, as seen in the table below.
+
+```{r nibrs.pop.cvr, message=F, warning=F}
+
+#nibrs_yrs_agency %>% ggplot(aes(x=startyr)) + geom_bar(fill='blue', alpha=.7)
+
+
+options(knitr.kable.NA = '')
+nibrs_pop_coverage %>%
+  mutate(pop.cvr.pct = 100*pop.cvr.pct,
+         year = as.character(year)) %>%
+  rename(`Year` = year,
+         `Agencies reporting` = num.agencies,
+         `By agencies` = pop.cvr,
+         `State Total` = StatePop,
+         `% covered` = pop.cvr.pct) %>%
+  
+  kable(caption = "NIBRS Coverage By Year in WA SAC Data Series",
+        digits = c(0,0,0,0,1),
+        format.args = list(big.mark = ",")) %>%
+  
+  kable_styling(bootstrap_options = c("striped","hover")) %>%
+  
+  #row_spec(row=dim(tab)[1], bold = T) %>%
+
+  add_header_above(c(" " = 2, "Population Coverage" = 3)) #%>%
+  
+  #footnote(general = c("Percents may not sum to 100 due to rounding"))
+
+
+
+```
+
+
+There is missing data from 2012-2018 from the non participating agencies.  This means that:
+
+* The raw crime counts are not comparable over time when aggregated up into larger groups (like counties, or the statewide totals).  
+
+    *Solution:*  Use crime rates per 1,000 persons.
+
+    Crime *rates* are numerically comparable when aggregated, since the population adjustment for the participating agencies keeps track of the changing coverage.
+
+* Trends in aggregated crime rates can still be influenced by the missing data, if the rates for the missing agencies are different than the participating agencies.
+
+    *Solution:* Restrict the focus to data after 2018
+
+    Once coverage reaches the 99% level in 2018, the potential impacts of missing data on trend estimates is minimal.
+    
+____
+
+## Population changes
+
+The other reason crime rates (rather than raw counts) are preferable when looking at trends over time is that they adjust for any changes in *population size*.  The WA state population grew by
+`r scales::percent(wa_pop$pct.chg[wa_pop$Jurisdiction == "State Total"])`
+from `r wa.minyr` to `r wa.maxyr`.  But the population growth rate was not the same statewide: some counties actually lost population, while other counties grew even faster.  
+
+The graph below shows the percent change in population size by county.  The state total is highlighted by a black outline. Hovering over the bars in the plot will pop up the population counts and change for each jurisdiction.
+
+
+```{r pop.chg, message=F, warning=F}
+p <- ggplot(wa_pop,
+       aes(x=pct.chg, y=reorder(Jurisdiction, pct.chg), 
+           fill = pct.chg,
+           col=factor(ifelse(Jurisdiction=="State Total", 1, 0)),
+           text=paste(Jurisdiction, "<br>",
+                      "start:", scales::comma(Y2012), "<br>",
+                      "end:", scales::comma(Y2021), "<br>",
+                      "change:", scales::percent(pct.chg, acc=1)))) +
+  
+  geom_bar(stat="identity") +
+  
+  scale_color_manual(values = c("grey", "black")) +
+  scale_fill_gradient(
+    low = "seashell", 
+    high = "firebrick") +
+  
+  scale_x_continuous(labels = scales::percent) + #_format(acc=1)) +
+  
+  theme(axis.text.y=element_text(size=rel(0.6)), legend.position = "none") +
+  labs(title = "Population Change (%) by County",
+       x="Percent change",
+       y="County")
+
+ggplotly(p, tooltip = "text")
+
+```
+ * Data source:  Official WA State estimates from the Office of Financial Management.  This is the "post-censal estimate" series, available for download [here](https://ofm.wa.gov/washington-data-research/population-demographics/population-estimates/historical-estimates-april-1-population-and-housing-state-counties-and-cities)
+ 
+____
+
+
+## NIBRS participation data {.tabset .tabset-pills}
+
+In the tabs below you can find the NIBRS participation data for WA State broken down by county and agency.
+
+
+### County participation stats
+
+This table shows the NIBRS participation statistics by County:  
+
+* how many law enforcement agencies joined in `r wa.minyr`, the first year of NIBRS data series
+
+* how many were participating in `r wa.maxyr`, the most recent year, and 
+
+* the year the last agency to participate joined.
+
+
+*Tips*: See all 39 counties by selecting "50" in the "show entries" box.  Sorting the table by the last column will make it easier to see which counties have complete participation for all years.
+
+
+```{r countynibrs, message=F, warning=F}
+
+nibrs_yrs_county %>%
+  DT::datatable(rownames = F,
+                colnames = c("County", "Agencies in 2012", "Agencies in 2020", "Year last agency joined"),
+                caption = "NIBRS PARTICIPATION STATISTICS FOR EACH COUNTY",
+                filter = 'top',
+                escape = FALSE,
+                #fillContainer = FALSE, 
+                options = list(pageLength = 10))
+
+```
+
+____
+
+
+### Agency participation stats
+
+This table shows when each law enforcement agency started participating in NIBRS, the most recent year of participation and the number of years of participation.  The program was started in 2012, so the maximum number of years of participation is `r wa.maxyr - wa.minyr + 1`.
+
+```{r agencynibrs, message=F, warning=F}
+
+nibrs_yrs_agency %>%
+  select(-contains("pop")) %>%
+  select(-partial) %>%
+  filter(!grepl("TOTAL", Location )) %>%
+  
+  DT::datatable(rownames = F,
+                colnames = c("County", "Agency", "First year", "Last year", "Years participated"),
+                caption = "NIBRS PARTICIPATION STATISTICS FOR EACH LAW ENFORCEMENT AGENCY",
+                filter = 'top',
+                escape = FALSE,
+                #fillContainer = FALSE, 
+                options = list(pageLength = 10))
+
+```
