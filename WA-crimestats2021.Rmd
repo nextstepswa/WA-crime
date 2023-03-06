@@ -35,8 +35,10 @@ library(cowplot)
 ## WA OFM Population data (post-censal estimate series) ----
 ## "Filter" variable identifies level, 1 is county total
 
-wa_pop_raw <- read_excel("~/GitHub/PopulationEstimates/WA-OFM/ofm_april1_postcensal_estimates_pop_1960-present.xlsx", 
-    sheet = "Population", skip = 3) 
+url <- "https://ofm.wa.gov/sites/default/files/public/dataresearch/pop/april1/hseries/ofm_april1_postcensal_estimates_pop_1960-present.xlsx"
+destfile <-  here::here("data-raw", "ofm_wa_pop_postcensal.xlsx")
+curl::curl_download(url, destfile)
+wa_pop_raw <- read_excel(destfile, sheet = "Population", skip = 3)
 
 wa_pop <- wa_pop_raw %>%
   filter(Filter == 1 | Jurisdiction == "State Total") %>%
