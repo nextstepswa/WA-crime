@@ -216,7 +216,7 @@ The narrative of "rising crime rates" seems to emerge whenever there is a threat
 
 Since the data on crime statistics in WA state are publicly available, it is worth comparing these claims to the evidence.  In this report we track the statewide trends in crime rates (per 1,000 residents) from 2012-2021 in WA, using the official statewide data published by the [Washington Statistical Analysis Center](https://sac.ofm.wa.gov/data).
 
-* The statewide data for 2022 data are not available yet. 
+* The statewide data for 2022 data are not available yet from the SAC, they will likely be released in October 2023. 
 
 ____
 
