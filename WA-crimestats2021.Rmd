@@ -35,10 +35,23 @@ library(cowplot)
 ## WA OFM Population data (post-censal estimate series) ----
 ## "Filter" variable identifies level, 1 is county total
 
-url <- "https://ofm.wa.gov/sites/default/files/public/dataresearch/pop/april1/hseries/ofm_april1_postcensal_estimates_pop_1960-present.xlsx"
-destfile <-  here::here("data-raw", "ofm_wa_pop_postcensal.xlsx")
-curl::curl_download(url, destfile)
-wa_pop_raw <- read_excel(destfile, sheet = "Population", skip = 3)
+## Since this file is usually made by scripts in the WA-Pop repo
+## we check for the file there, and only download if it's not
+
+if(!file.exists("~/GitHub/WA-pop/data-outputs/WA_pop.rda")){
+  
+  warning("Need to update WA population data")
+  
+  url <- "https://ofm.wa.gov/sites/default/files/public/dataresearch/pop/april1/hseries/ofm_april1_postcensal_estimates_pop_1960-present.xlsx"
+  destfile <-  "~/GitHub/WA-pop/ofm_april1_postcensal_estimates_pop_1960-present.xlsx"
+  curl::curl_download(url, destfile)
+  wa_pop_raw <- read_excel(destfile, sheet = "Population", skip = 3)
+  
+} else {
+  load("~/GitHub/WA-pop/data-outputs/WA_pop.rda")
+}
+
+## Extract the data we need for county totals
 
 wa_pop <- wa_pop_raw %>%
   filter(Filter == 1 | Jurisdiction == "State Total") %>%
@@ -67,6 +80,7 @@ wa_poptotal_long   <- wa_pop_raw %>%
 ## Get cleaned OFM NIBRS data for WA (annual updates lag by about 10 mos)
 
 ## NOTE THEIR RATES ARE PER 1000 PERSONS 
+## We download each time in case the files have been updated.
 
 library(readxl)
 #url <- "https://sac.ofm.wa.gov/sites/default/files/public/download/nibrs_12_20.xlsx"
@@ -394,7 +408,7 @@ colnames = c("Year", rep(names(wa_tot_tab)[2:5], 2))
 wa_tot_tab %>%
   mutate(across(contains("pct"), ~.x *100)) %>%
   
-  kbl(caption = "Washington State Crime Rates:  2012-2020",
+  kbl(caption = paste0("Washington State Crime Rates:  2012-", wa.maxyr),
       col.names = colnames,
       digits = c(rep(1,5), rep(1,4))) %>%
   kable_styling(bootstrap_options = c("striped", "hover")) %>%
@@ -999,8 +1013,8 @@ nibrs_pop_coverage %>%
   mutate(pop.cvr.pct = 100*pop.cvr.pct,
          year = as.character(year)) %>%
   rename(`Year` = year,
-         `Agencies reporting` = num.agencies,
-         `By agencies` = pop.cvr,
+         `Agencies Reporting` = num.agencies,
+         `Reporting Agencies` = pop.cvr,
          `State Total` = StatePop,
          `% covered` = pop.cvr.pct) %>%
   
@@ -1066,7 +1080,7 @@ p <- ggplot(wa_pop,
   scale_x_continuous(labels = scales::percent) + #_format(acc=1)) +
   
   theme(axis.text.y=element_text(size=rel(0.6)), legend.position = "none") +
-  labs(title = "Population Change (%) by County",
+  labs(title = paste0("Population Change (%) by County: 2012-", wa.maxyr),
        x="Percent change",
        y="County")
 
@@ -1101,7 +1115,8 @@ This table shows the NIBRS participation statistics by County:
 
 nibrs_yrs_county %>%
   DT::datatable(rownames = F,
-                colnames = c("County", "Agencies in 2012", "Agencies in 2020", "Year last agency joined"),
+                colnames = c("County", "Agencies in 2012", 
+                             paste("Agencies in", wa.maxyr), "Year last agency joined"),
                 caption = "NIBRS PARTICIPATION STATISTICS FOR EACH COUNTY",
                 filter = 'top',
                 escape = FALSE,
